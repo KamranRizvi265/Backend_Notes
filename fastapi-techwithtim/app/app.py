@@ -1,10 +1,14 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Depends
-from sqlalchemy.engine import url
 from schema.post import PostSchema
 from database.db import Post, create_db_and_tables, create_async_engine, get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 from sqlalchemy import select
+from app.images import imagekit
+import os
+import shutil
+import uuid
+import tempfile
 
 @asynccontextmanager
 async def lifespan(app : FastAPI):
@@ -19,17 +23,42 @@ async def upload_file(
     caption : str = Form(""),
     session : AsyncSession = Depends(get_async_session)
 ):
-    post = Post(
-        caption=caption,
-        url = "dummy_url",
-        file_type = ".jpg",
-        file_name = "dummy name"
-    )
+    temp_file_path = None
 
-    session.add(post)
-    await session.commit()
-    await session.refresh(post)
-    return post
+    try:
+        with tempfile.NamedTemporaryFile(delete=False,suffix=os.path.splitext(file.filename or "")[1]) as temp_file:
+            temp_file_path = temp_file.name
+            shutil.copyfileobj(file.file, temp_file)
+            temp_file.seek(0)
+
+        upload_result = imagekit.files.upload(
+            file=open(temp_file_path, "rb"),
+            file_name=file.filename or "",
+            tags=["backend-upload"]
+        )
+
+        if upload_result and upload_result.file_id:
+            post = Post(
+                caption=caption,
+                url = upload_result.url,
+                file_type = "video" if file.content_type.startswith("video") else "image",
+                file_name = upload_result.name
+            )
+
+            session.add(post)
+            await session.commit()
+            await session.refresh(post)
+            return post
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception as cleanup_error:
+                print(f"Error cleaning up temporary file: {cleanup_error}")
+        file.file.close()
 
 @app.get("/feed")
 async def get_feed(
@@ -51,4 +80,4 @@ async def get_feed(
             }
         )
 
-        return {"post": posts_data}
+    return {"post": posts_data}
