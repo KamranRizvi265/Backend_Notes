@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Depends
 from schema.post import PostSchema
+from schema.user import UserCreate, UserRead, UserUpdate
 from database.db import Post, create_db_and_tables, create_async_engine, get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
@@ -9,13 +10,50 @@ import os
 import shutil
 import uuid
 import tempfile
+from app.users import fastapi_users, current_active_user, auth_backend
 
+# Define the lifespan context manager to create the database and tables on startup
 @asynccontextmanager
 async def lifespan(app : FastAPI):
     await create_db_and_tables()
     yield 
 
 app = FastAPI(lifespan=lifespan)
+
+# Include the authentication router for JWT authentication
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend),
+    prefix="/auth/jwt",
+    tags=["auth"]
+)
+
+# Include the user management router for user-related operations
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/auth",
+    tags=["auth"]
+)
+
+# Include the user management router for user-related operations
+app.include_router(
+    fastapi_users.get_reset_password_router(),
+    prefix="/auth",
+    tags=["auth"]
+)
+
+# Include the user management router for user-related operations
+app.include_router(
+    fastapi_users.get_verify_router(UserRead),
+    prefix="/auth",
+    tags=["auth"]
+)
+
+# Include the user management router for user-related operations
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/users",
+    tags=["users"]
+)
 
 @app.post("/upload")
 async def upload_file(
