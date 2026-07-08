@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Depends
 from schema.post import PostSchema
 from schema.user import UserCreate, UserRead, UserUpdate
-from database.db import Post, create_db_and_tables, create_async_engine, get_async_session
+from database.db import Post, create_db_and_tables, create_async_engine, get_async_session, User
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 from sqlalchemy import select
@@ -59,6 +59,7 @@ app.include_router(
 async def upload_file(
     file : UploadFile = File(...),
     caption : str = Form(""),
+    user : User = Depends(current_active_user),  # Get the currently authenticated user
     session : AsyncSession = Depends(get_async_session)
 ):
     temp_file_path = None
@@ -77,9 +78,10 @@ async def upload_file(
 
         if upload_result and upload_result.file_id:
             post = Post(
+                user_id = user.id,
                 caption=caption,
                 url = upload_result.url,
-                file_type = "video" if file.content_type.startswith("video") else "image",
+                file_type = "video" if (file.content_type or "").startswith("video") else "image",
                 file_name = upload_result.name
             )
 
@@ -100,10 +102,16 @@ async def upload_file(
 
 @app.get("/feed")
 async def get_feed(
-    session : AsyncSession = Depends(get_async_session)
+    session : AsyncSession = Depends(get_async_session),
+    user : User = Depends(current_active_user)  # Get the currently authenticated user
 ):
     result = await session.execute(select(Post).order_by(Post.created_at.desc()))
     posts = [row[0] for row in result.all()]
+
+    # Fetch the full user record from DB to ensure up-to-date info
+    result_user = await session.execute(select(User))
+    users = [row[0] for row in result_user.all()]
+    user_dict = {u.id: u for u in users}
 
     posts_data = []
     for post in posts:
@@ -111,31 +119,43 @@ async def get_feed(
             {
             "id" : str(post.id),
             "caption" : post.caption,
+            "user_id" : str(post.user_id),
             "url" : post.url,
             "file_type" : post.file_type,
             "file_name" : post.file_name,
-            "created_at" : post.created_at.isoformat()
+            "created_at" : post.created_at.isoformat(),
+            "is_owner" : post.user_id == user.id,  # Check if the authenticated user is the owner of the post
+            "email" : user_dict.get(post.user_id, {}).email if post.user_id in user_dict else None  # Include the email of the authenticated user
             }
         )
 
+    if not posts_data:
+        raise HTTPException(status_code=404, detail="No posts found")
     return {"post": posts_data}
 
 @app.delete("/posts/{post_id}")
 async def delete_post(
     post_id: str,
-    session: AsyncSession = Depends(get_async_session)
+    session: AsyncSession = Depends(get_async_session),
+    user : User = Depends(current_active_user)  # Get the currently authenticated user
 ):
     try:
         post_uuid = uuid.UUID(post_id)
         result = await session.execute(select(Post).where(Post.id == post_uuid))
-        post = result.scalars().first()
+        post : Post | None = result.scalars().first()
 
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
+        
+        # Check if the authenticated user is the owner of the post
+        if str(post.user_id) != str(user.id):
+            raise HTTPException(status_code=403, detail="You are not authorized to delete this post")
 
         await session.delete(post)
         await session.commit()
 
         return {"success": True, "message": "Post deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
