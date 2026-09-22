@@ -6,7 +6,16 @@
     <title>Django Project</title>
 </head>
 <body>
-    This is my first django project. I am learning django from codewithharry.
-    <p>Hello, {{ name }}! You are from {{ place }}.</p>
+    <h1>Welcome to Text Analyzer. Enter your text below:</h1>
+    <form action="/analyze" method="get">
+        <textarea name="text" style="margin: 10px; width: 300px; height: 100px;" placeholder="Enter your text here...">
+        </textarea>
+        <br>
+        <input type="checkbox" name="removepunc"> Remove Punctuation
+        <br>
+        <button type="submit">
+            Analyze Text
+        </button>
+    </form>
 </body>
 </html>
